@@ -378,7 +378,8 @@ namespace CommandLine
     {
         Success             = 0x01,
         Failure             = 0x02,
-        MoveOnNextElement   = 0x04
+        MoveOnNextElement   = 0x04,
+        StopParsing         = 0x08
     }
 
     internal abstract class ArgumentParser
@@ -397,7 +398,7 @@ namespace CommandLine
             this.PostParsingState.Add(new ParsingError(option.ShortName, option.LongName, true));
         }
 
-        public static ArgumentParser Create(string argument, bool ignoreUnknownArguments = false)
+        public static ArgumentParser Create(string argument, bool ignoreUnknownArguments = false, bool stopAtDoubleDash = false)
         {
             if (StringUtil.IsNumeric(argument))
                 return null;
@@ -406,7 +407,7 @@ namespace CommandLine
                 return null;
 
             if (argument[0] == '-' && argument[1] == '-')
-                return new LongOptionParser(ignoreUnknownArguments);
+                return new LongOptionParser(ignoreUnknownArguments, stopAtDoubleDash);
 
             if (argument[0] == '-')
                 return new OptionGroupParser(ignoreUnknownArguments);
@@ -540,14 +541,18 @@ namespace CommandLine
     internal sealed class LongOptionParser : ArgumentParser
     {
         private readonly bool _ignoreUnkwnownArguments;
+        private readonly bool _stopAtDoubleDash;
 
-        public LongOptionParser(bool ignoreUnkwnownArguments)
-        {
+        public LongOptionParser(bool ignoreUnkwnownArguments, bool stopAtDoubleDash) {
             _ignoreUnkwnownArguments = ignoreUnkwnownArguments;
+            _stopAtDoubleDash = stopAtDoubleDash;
         }
 
         public override ParserState Parse(IArgumentEnumerator argumentEnumerator, OptionMap map, object options)
         {
+            if (_stopAtDoubleDash && argumentEnumerator.Current == "--")
+                return ParserState.StopParsing;
+            
             var parts = argumentEnumerator.Current.Substring(2).Split(new[] { '=' }, 2);
             var option = map[parts[0]];
             bool valueSetting;
@@ -1661,6 +1666,17 @@ namespace CommandLine
             internal get;
             set;
         }
+
+        /// <summary>
+        /// Gets or sets a value indicating if the parser should stop parsing arguments if it sees a "--"
+        /// </summary>
+        /// <remarks>
+        /// This allows the specifying of argument-like options after the --
+        /// </remarks>
+        public bool StopAtDoubleDash {
+            internal get;
+            set;
+        }
     }
 
     /// <summary>
@@ -1765,12 +1781,13 @@ namespace CommandLine
             var target = new TargetWrapper(options);
 
             IArgumentEnumerator arguments = new StringArrayEnumerator(args);
+            bool stillParsing = true;
             while (arguments.MoveNext())
             {
                 string argument = arguments.Current;
                 if (!string.IsNullOrEmpty(argument))
                 {
-                    ArgumentParser parser = ArgumentParser.Create(argument, _settings.IgnoreUnknownArguments);
+                    ArgumentParser parser = stillParsing ? ArgumentParser.Create(argument, _settings.IgnoreUnknownArguments, _settings.StopAtDoubleDash) : null;
                     if (parser != null)
                     {
                         ParserState result = parser.Parse(arguments, optionMap, options);
@@ -1780,6 +1797,9 @@ namespace CommandLine
                             hadError = true;
                             continue;
                         }
+
+                        if ((result & ParserState.StopParsing) == ParserState.StopParsing)
+                            stillParsing = false;
 
                         if ((result & ParserState.MoveOnNextElement) == ParserState.MoveOnNextElement)
                             arguments.MoveNext();
